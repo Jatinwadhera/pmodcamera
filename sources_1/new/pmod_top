@@ -1,0 +1,105 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Engineer: Jatin
+// Project: Camera Capture to DDR (Zynq)
+// Module: pmod_top
+// Description: Camera interface with proper XCLK generation and RGB output
+//////////////////////////////////////////////////////////////////////////////////
+
+
+module pmod_top (
+    // ===== Camera Interface Inputs =====
+    input  wire        i_pclk_0_0,          // Pixel clock from camera (PCLK)
+    input  wire        i_reset_n_0_0,       // Active low reset
+    input  wire        i_vsync_0_0,         // VSYNC
+    input  wire        i_href_0_0,          // HREF
+    input  wire [7:0]  i_data_0_0,          // 8-bit data from camera
+    input  wire        i_start_capture_0_0, // Trigger to start capture
+    input  wire        i_clk_24mhz,         // 24 MHz clock input from Clock Wizard
+
+    // ===== Video Stream Outputs =====
+    output reg  [7:0]  o_r,                 // Red channel
+    output reg  [7:0]  o_g,                 // Green channel
+    output reg  [7:0]  o_b,                 // Blue channel
+    output reg         o_valid,             // Pixel valid
+    output reg         o_sof,               // Start of frame
+    output reg         o_eol,               // End of line
+
+    // ===== Camera Control =====
+    output wire        o_xclk               // Camera master clock output (24MHz)
+);
+
+    //----------------------------------------------------------
+    // Clock Generation (Direct 24 MHz Clock to Camera)
+    //----------------------------------------------------------
+    // Directly pass the 24 MHz clock from Clock Wizard to camera.
+    // No gating or toggling – stable continuous XCLK signal.
+    assign o_xclk = i_clk_24mhz;
+
+    //----------------------------------------------------------
+    // Pixel Capture Logic
+    //----------------------------------------------------------
+    reg vsync_d, byte_sel, capturing;
+    reg [15:0] pixel16;
+
+    wire [4:0] R5 = pixel16[15:11];
+    wire [5:0] G6 = pixel16[10:5];
+    wire [4:0] B5 = pixel16[4:0];
+
+    wire [7:0] R8 = {R5, R5[4:2]};
+    wire [7:0] G8 = {G6, G6[5:4]};
+    wire [7:0] B8 = {B5, B5[4:2]};
+
+    always @(posedge i_pclk_0_0 or negedge i_reset_n_0_0) begin
+        if (!i_reset_n_0_0) begin
+            o_r        <= 8'd0;
+            o_g        <= 8'd0;
+            o_b        <= 8'd0;
+            o_valid    <= 1'b0;
+            o_sof      <= 1'b0;
+            o_eol      <= 1'b0;
+            vsync_d    <= 1'b0;
+            byte_sel   <= 1'b0;
+            pixel16    <= 16'd0;
+            capturing  <= 1'b0;
+        end else begin
+            o_valid <= 1'b0;
+            o_sof   <= 1'b0;
+            o_eol   <= 1'b0;
+
+            // Frame start detection
+            if (i_start_capture_0_0 && i_vsync_0_0 && !vsync_d)
+                capturing <= 1'b1;
+
+            // Stop capture if trigger low
+            if (!i_start_capture_0_0)
+                capturing <= 1'b0;
+
+            if (i_vsync_0_0 && !vsync_d)
+                o_sof <= 1'b1;
+
+            vsync_d <= i_vsync_0_0;
+
+            // Pixel collection
+            if (capturing && i_href_0_0) begin
+                if (!byte_sel) begin
+                    pixel16[15:8] <= i_data_0_0;
+                    byte_sel      <= 1'b1;
+                end else begin
+                    pixel16[7:0] <= i_data_0_0;
+                    byte_sel     <= 1'b0;
+
+                    o_r      <= R8;
+                    o_g      <= G8;
+                    o_b      <= B8;
+                    o_valid  <= 1'b1;
+                end
+            end else if (capturing && !i_href_0_0) begin
+                o_eol    <= 1'b1;
+                byte_sel <= 1'b0;
+            end
+        end
+    end
+
+endmodule
+ 
